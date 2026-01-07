@@ -55,12 +55,12 @@
             <p>• WASD - Move</p>
             <p>• Mouse - Look around (X-Axis Inverted)</p>
             <p>• Space - Jump</p>
-            <p>• Left Click - Blue Portal</p>
-            <p>• Right Click - Orange Portal</p>
+            <p>• Left Click - Blue Portal (White Walls Only)</p>
+            <p>• Right Click - Orange Portal (White Walls Only)</p>
             <p>• E - Pick up/Drop cube</p>
         </div>
         <p class="note">
-            Place portals on walls, pick up the golden cube, and place it on the red button to open the green door!
+            Portals only work on WHITE surfaces. Place the golden cube on the red button to open the green door!
         </p>
     </div>
 
@@ -106,45 +106,52 @@
         dirLight.shadow.camera.bottom = -30;
         scene.add(dirLight);
 
+        // Materials
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x444444 }); // Dark gray (No portals)
+        const wallMatNonPortal = new THREE.MeshStandardMaterial({ color: 0x444444 }); // Dark gray (No portals)
+        const wallMatPortal = new THREE.MeshStandardMaterial({ color: 0xffffff }); // White (Portals allowed)
+
         // Floor
         const floorGeo = new THREE.PlaneGeometry(50, 50);
-        const floorMat = new THREE.MeshStandardMaterial({ color: 0x808080 });
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
         floor.receiveShadow = true;
-        floor.userData = { type: 'floor' };
+        floor.userData = { type: 'floor', portalable: false };
         scene.add(floor);
 
         // Walls
-        const wallMat = new THREE.MeshStandardMaterial({ color: 0xa0a0a0 });
-        
-        function createWall(w, h, x, y, z, rotY = 0) {
+        function createWall(w, h, x, y, z, rotY = 0, portalable = false) {
             const geo = new THREE.BoxGeometry(w, h, 0.5);
-            const wall = new THREE.Mesh(geo, wallMat);
+            const mat = portalable ? wallMatPortal : wallMatNonPortal;
+            const wall = new THREE.Mesh(geo, mat);
             wall.position.set(x, y, z);
             wall.rotation.y = rotY;
             wall.receiveShadow = true;
             wall.castShadow = true;
-            wall.userData = { type: 'wall' };
+            wall.userData = { type: 'wall', portalable: portalable };
             scene.add(wall);
             return wall;
         }
 
-        createWall(50, 10, 0, 5, -25);
-        createWall(50, 10, 0, 5, 25);
-        createWall(50, 10, -25, 5, 0, Math.PI / 2);
-        createWall(50, 10, 25, 5, 0, Math.PI / 2);
+        // Environment boundaries
+        createWall(50, 10, 0, 5, -25, 0, true);  // North (White)
+        createWall(50, 10, 0, 5, 25, 0, false);  // South (Gray)
+        createWall(50, 10, -25, 5, 0, Math.PI / 2, true); // West (White)
+        createWall(50, 10, 25, 5, 0, Math.PI / 2, false); // East (Gray)
 
-        // Add platforms
+        // Add some interior portalable walls
+        createWall(10, 10, 5, 5, -5, 0, true);
+        createWall(10, 10, -15, 5, 10, Math.PI / 2, true);
+
+        // Add platforms (Non-portalable)
         const platformMat = new THREE.MeshStandardMaterial({ color: 0x606060 });
-        
         function createPlatform(w, h, d, x, y, z) {
             const geo = new THREE.BoxGeometry(w, h, d);
             const platform = new THREE.Mesh(geo, platformMat);
             platform.position.set(x, y, z);
             platform.receiveShadow = true;
             platform.castShadow = true;
-            platform.userData = { type: 'platform' };
+            platform.userData = { type: 'platform', portalable: false };
             scene.add(platform);
             return platform;
         }
@@ -186,15 +193,15 @@
                 color: color, 
                 side: THREE.DoubleSide,
                 transparent: true,
-                opacity: 0.8
+                opacity: 0.9
             });
             const portal = new THREE.Mesh(portalGeo, portalMat);
             
-            const glowGeo = new THREE.RingGeometry(1.3, 2, 32);
+            const glowGeo = new THREE.RingGeometry(0, 1.5, 32);
             const glowMat = new THREE.MeshBasicMaterial({
                 color: color,
                 transparent: true,
-                opacity: 0.3,
+                opacity: 0.2,
                 side: THREE.DoubleSide
             });
             const glow = new THREE.Mesh(glowGeo, glowMat);
@@ -204,7 +211,6 @@
             return portal;
         }
 
-        // Raycaster for portal placement and object interaction
         const raycaster = new THREE.Raycaster();
         const rayDirection = new THREE.Vector3();
 
@@ -248,8 +254,8 @@
 
         function onMouseMove(e) {
             if (!mouse.locked) return;
-            // Inverting the X axis: use += instead of -= for movementX
-            mouse.x += e.movementX * 0.002; 
+            // Inverted X-Axis (e.movementX * -1)
+            mouse.x -= e.movementX * 0.002; 
             mouse.y -= e.movementY * 0.002;
             mouse.y = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, mouse.y));
         }
@@ -263,29 +269,27 @@
             
             if (intersects.length > 0) {
                 const hit = intersects[0];
-                const hitType = hit.object.userData.type;
                 
-                // Ensure we only place on walls or platforms, not on portals themselves
-                if (hitType === 'wall' || hitType === 'platform') {
+                // Only place on portalable (white) surfaces
+                if (hit.object.userData.portalable) {
                     const isLeftClick = e.button === 0;
                     const portalKey = isLeftClick ? 'blue' : 'orange';
                     const portalColor = isLeftClick ? 0x0066ff : 0xff6600;
                     
-                    // Remove existing portal of the same color if it exists
                     if (state.portalGun[portalKey]) {
                         scene.remove(state.portalGun[portalKey]);
                         state.portalGun[portalKey] = null;
                     }
                     
                     const portal = createPortal(portalColor);
-                    portal.position.copy(hit.point);
-                    portal.position.add(hit.face.normal.multiplyScalar(0.01));
                     
-                    const quaternion = new THREE.Quaternion().setFromUnitVectors(
-                        new THREE.Vector3(0, 0, 1),
-                        hit.face.normal
-                    );
-                    portal.setRotationFromQuaternion(quaternion);
+                    // Position: slightly offset from face
+                    portal.position.copy(hit.point);
+                    portal.position.add(hit.face.normal.clone().multiplyScalar(0.05));
+                    
+                    // Rotation: Correctly align with surface normal
+                    const lookTarget = hit.point.clone().add(hit.face.normal);
+                    portal.lookAt(lookTarget);
                     
                     scene.add(portal);
                     state.portalGun[portalKey] = portal;
@@ -315,7 +319,6 @@
         renderer.domElement.addEventListener('click', onClick);
         document.addEventListener('pointerlockchange', onPointerLockChange);
 
-        // Window resize
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
@@ -326,12 +329,10 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // Camera rotation
             camera.rotation.order = 'YXZ';
             camera.rotation.y = mouse.x;
             camera.rotation.x = mouse.y;
 
-            // Movement
             const forward = new THREE.Vector3();
             camera.getWorldDirection(forward);
             forward.y = 0;
@@ -351,41 +352,34 @@
                 camera.position.add(moveDir);
             }
 
-            // Gravity
             if (!state.onGround) {
                 state.velocity.y -= gravity;
             }
             camera.position.y += state.velocity.y;
 
-            // Ground collision
             if (camera.position.y < playerHeight) {
                 camera.position.y = playerHeight;
                 state.velocity.y = 0;
                 state.onGround = true;
             }
 
-            // Wall boundaries
             camera.position.x = Math.max(-24, Math.min(24, camera.position.x));
             camera.position.z = Math.max(-24, Math.min(24, camera.position.z));
 
-            // Held cube follows player
             if (state.holdingCube && state.heldCube) {
                 camera.getWorldDirection(forward);
                 state.heldCube.position.copy(camera.position);
                 state.heldCube.position.add(forward.multiplyScalar(3));
                 state.heldCube.position.y = camera.position.y - 0.5;
             } else if (cube.userData.type === 'cube') {
-                // Cube physics
                 cube.userData.velocity.y -= gravity;
                 cube.position.add(cube.userData.velocity);
-                
                 if (cube.position.y < 0.75) {
                     cube.position.y = 0.75;
                     cube.userData.velocity.y = 0;
                 }
             }
 
-            // Button check
             const distToButton = cube.position.distanceTo(button.position);
             if (distToButton < 1.5 && !button.userData.pressed) {
                 button.userData.pressed = true;
@@ -394,17 +388,21 @@
                 door.position.y = -3;
             }
 
-            // Portal teleportation
+            // Portal teleportation logic
             if (state.portalGun.blue && state.portalGun.orange) {
                 const distToBlue = camera.position.distanceTo(state.portalGun.blue.position);
                 const distToOrange = camera.position.distanceTo(state.portalGun.orange.position);
                 
-                if (distToBlue < 2) {
-                    camera.position.copy(state.portalGun.orange.position);
-                    camera.position.add(new THREE.Vector3(0, 0, 2));
-                } else if (distToOrange < 2) {
-                    camera.position.copy(state.portalGun.blue.position);
-                    camera.position.add(new THREE.Vector3(0, 0, 2));
+                if (distToBlue < 1.5) {
+                    // Teleport to Orange
+                    const outNormal = new THREE.Vector3(0, 0, 1);
+                    outNormal.applyQuaternion(state.portalGun.orange.quaternion);
+                    camera.position.copy(state.portalGun.orange.position).add(outNormal.multiplyScalar(2));
+                } else if (distToOrange < 1.5) {
+                    // Teleport to Blue
+                    const outNormal = new THREE.Vector3(0, 0, 1);
+                    outNormal.applyQuaternion(state.portalGun.blue.quaternion);
+                    camera.position.copy(state.portalGun.blue.position).add(outNormal.multiplyScalar(2));
                 }
             }
 
