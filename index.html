@@ -265,12 +265,16 @@
                 const hit = intersects[0];
                 const hitType = hit.object.userData.type;
                 
+                // Ensure we only place on walls or platforms, not on portals themselves
                 if (hitType === 'wall' || hitType === 'platform') {
-                    const portalColor = e.button === 0 ? 0x0066ff : 0xff6600;
-                    const portalKey = e.button === 0 ? 'blue' : 'orange';
+                    const isLeftClick = e.button === 0;
+                    const portalKey = isLeftClick ? 'blue' : 'orange';
+                    const portalColor = isLeftClick ? 0x0066ff : 0xff6600;
                     
+                    // Remove existing portal of the same color if it exists
                     if (state.portalGun[portalKey]) {
                         scene.remove(state.portalGun[portalKey]);
+                        state.portalGun[portalKey] = null;
                     }
                     
                     const portal = createPortal(portalColor);
