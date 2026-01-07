@@ -1,0 +1,392 @@
+import React, { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+
+const PortalGame = () => {
+  const containerRef = useRef(null);
+  const [instructions, setInstructions] = useState(true);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    // Scene setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87ceeb);
+    scene.fog = new THREE.Fog(0x87ceeb, 0, 100);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    containerRef.current.appendChild(renderer.domElement);
+
+    // Game state
+    const state = {
+      velocity: new THREE.Vector3(),
+      onGround: false,
+      holdingCube: false,
+      heldCube: null,
+      portalGun: { blue: null, orange: null }
+    };
+
+    const keys = {};
+    const mouse = { x: 0, y: 0, locked: false };
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    dirLight.shadow.camera.left = -30;
+    dirLight.shadow.camera.right = 30;
+    dirLight.shadow.camera.top = 30;
+    dirLight.shadow.camera.bottom = -30;
+    scene.add(dirLight);
+
+    // Floor
+    const floorGeo = new THREE.PlaneGeometry(50, 50);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x808080 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    floor.userData = { type: 'floor' };
+    scene.add(floor);
+
+    // Walls
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xa0a0a0 });
+    
+    const createWall = (w, h, x, y, z, rotY = 0) => {
+      const geo = new THREE.BoxGeometry(w, h, 0.5);
+      const wall = new THREE.Mesh(geo, wallMat);
+      wall.position.set(x, y, z);
+      wall.rotation.y = rotY;
+      wall.receiveShadow = true;
+      wall.castShadow = true;
+      wall.userData = { type: 'wall' };
+      scene.add(wall);
+      return wall;
+    };
+
+    createWall(50, 10, 0, 5, -25);
+    createWall(50, 10, 0, 5, 25);
+    createWall(50, 10, -25, 5, 0, Math.PI / 2);
+    createWall(50, 10, 25, 5, 0, Math.PI / 2);
+
+    // Add platforms
+    const platformMat = new THREE.MeshStandardMaterial({ color: 0x606060 });
+    
+    const createPlatform = (w, h, d, x, y, z) => {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const platform = new THREE.Mesh(geo, platformMat);
+      platform.position.set(x, y, z);
+      platform.receiveShadow = true;
+      platform.castShadow = true;
+      platform.userData = { type: 'platform' };
+      scene.add(platform);
+      return platform;
+    };
+
+    createPlatform(8, 1, 8, -10, 2, -10);
+    createPlatform(8, 1, 8, 10, 4, 10);
+    createPlatform(6, 1, 6, 15, 6, -5);
+
+    // Companion cube
+    const cubeGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+    const cubeMat = new THREE.MeshStandardMaterial({ color: 0xd4af37 });
+    const cube = new THREE.Mesh(cubeGeo, cubeMat);
+    cube.position.set(5, 2, 5);
+    cube.castShadow = true;
+    cube.receiveShadow = true;
+    cube.userData = { type: 'cube', velocity: new THREE.Vector3() };
+    scene.add(cube);
+
+    // Button
+    const buttonGeo = new THREE.CylinderGeometry(1, 1, 0.2, 32);
+    const buttonMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+    const button = new THREE.Mesh(buttonGeo, buttonMat);
+    button.position.set(-15, 0.1, -15);
+    button.userData = { type: 'button', pressed: false };
+    scene.add(button);
+
+    // Door
+    const doorGeo = new THREE.BoxGeometry(4, 6, 0.5);
+    const doorMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+    const door = new THREE.Mesh(doorGeo, doorMat);
+    door.position.set(20, 3, -24.5);
+    door.userData = { type: 'door', open: false };
+    scene.add(door);
+
+    // Portal creation
+    const createPortal = (color) => {
+      const portalGeo = new THREE.RingGeometry(1.5, 1.8, 32);
+      const portalMat = new THREE.MeshBasicMaterial({ 
+        color: color, 
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.8
+      });
+      const portal = new THREE.Mesh(portalGeo, portalMat);
+      
+      const glowGeo = new THREE.RingGeometry(1.3, 2, 32);
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.3,
+        side: THREE.DoubleSide
+      });
+      const glow = new THREE.Mesh(glowGeo, glowMat);
+      portal.add(glow);
+      
+      portal.userData = { type: 'portal', color: color === 0x0066ff ? 'blue' : 'orange' };
+      return portal;
+    };
+
+    // Raycaster for portal placement and object interaction
+    const raycaster = new THREE.Raycaster();
+    const rayDirection = new THREE.Vector3();
+
+    // Player setup
+    camera.position.set(0, 2, 10);
+    const playerHeight = 2;
+    const playerRadius = 0.5;
+    const moveSpeed = 0.15;
+    const jumpForce = 0.3;
+    const gravity = 0.015;
+
+    // Event listeners
+    const onKeyDown = (e) => {
+      keys[e.code] = true;
+      if (e.code === 'Space' && state.onGround) {
+        state.velocity.y = jumpForce;
+        state.onGround = false;
+      }
+      if (e.code === 'KeyE') {
+        if (!state.holdingCube) {
+          // Try to pick up cube
+          camera.getWorldDirection(rayDirection);
+          raycaster.set(camera.position, rayDirection);
+          const intersects = raycaster.intersectObjects(scene.children);
+          
+          for (let intersect of intersects) {
+            if (intersect.object.userData.type === 'cube' && intersect.distance < 4) {
+              state.holdingCube = true;
+              state.heldCube = intersect.object;
+              break;
+            }
+          }
+        } else {
+          // Drop cube
+          state.holdingCube = false;
+          state.heldCube = null;
+        }
+      }
+    };
+
+    const onKeyUp = (e) => {
+      keys[e.code] = false;
+    };
+
+    const onMouseMove = (e) => {
+      if (!mouse.locked) return;
+      mouse.x += e.movementX * 0.002;
+      mouse.y -= e.movementY * 0.002;
+      mouse.y = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, mouse.y));
+    };
+
+    const onMouseDown = (e) => {
+      if (!mouse.locked) return;
+      
+      camera.getWorldDirection(rayDirection);
+      raycaster.set(camera.position, rayDirection);
+      const intersects = raycaster.intersectObjects(scene.children);
+      
+      if (intersects.length > 0) {
+        const hit = intersects[0];
+        const hitType = hit.object.userData.type;
+        
+        if (hitType === 'wall' || hitType === 'platform') {
+          const portalColor = e.button === 0 ? 0x0066ff : 0xff6600;
+          const portalKey = e.button === 0 ? 'blue' : 'orange';
+          
+          if (state.portalGun[portalKey]) {
+            scene.remove(state.portalGun[portalKey]);
+          }
+          
+          const portal = createPortal(portalColor);
+          portal.position.copy(hit.point);
+          portal.position.add(hit.face.normal.multiplyScalar(0.01));
+          
+          const up = new THREE.Vector3(0, 1, 0);
+          const quaternion = new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 0, 1),
+            hit.face.normal
+          );
+          portal.setRotationFromQuaternion(quaternion);
+          
+          scene.add(portal);
+          state.portalGun[portalKey] = portal;
+        }
+      }
+    };
+
+    const onClick = () => {
+      if (!mouse.locked) {
+        renderer.domElement.requestPointerLock();
+      }
+    };
+
+    const onPointerLockChange = () => {
+      mouse.locked = document.pointerLockElement === renderer.domElement;
+      setInstructions(!mouse.locked);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mousedown', onMouseDown);
+    renderer.domElement.addEventListener('click', onClick);
+    document.addEventListener('pointerlockchange', onPointerLockChange);
+
+    // Game loop
+    const animate = () => {
+      requestAnimationFrame(animate);
+
+      // Camera rotation
+      camera.rotation.order = 'YXZ';
+      camera.rotation.y = mouse.x;
+      camera.rotation.x = mouse.y;
+
+      // Movement
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward);
+      forward.y = 0;
+      forward.normalize();
+
+      const right = new THREE.Vector3();
+      right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+      const moveDir = new THREE.Vector3();
+      if (keys['KeyW']) moveDir.add(forward);
+      if (keys['KeyS']) moveDir.sub(forward);
+      if (keys['KeyA']) moveDir.sub(right);
+      if (keys['KeyD']) moveDir.add(right);
+
+      if (moveDir.length() > 0) {
+        moveDir.normalize().multiplyScalar(moveSpeed);
+        camera.position.add(moveDir);
+      }
+
+      // Gravity
+      if (!state.onGround) {
+        state.velocity.y -= gravity;
+      }
+      camera.position.y += state.velocity.y;
+
+      // Ground collision
+      if (camera.position.y < playerHeight) {
+        camera.position.y = playerHeight;
+        state.velocity.y = 0;
+        state.onGround = true;
+      }
+
+      // Wall boundaries
+      camera.position.x = Math.max(-24, Math.min(24, camera.position.x));
+      camera.position.z = Math.max(-24, Math.min(24, camera.position.z));
+
+      // Held cube follows player
+      if (state.holdingCube && state.heldCube) {
+        camera.getWorldDirection(forward);
+        state.heldCube.position.copy(camera.position);
+        state.heldCube.position.add(forward.multiplyScalar(3));
+        state.heldCube.position.y = camera.position.y - 0.5;
+      } else if (cube.userData.type === 'cube') {
+        // Cube physics
+        cube.userData.velocity.y -= gravity;
+        cube.position.add(cube.userData.velocity);
+        
+        if (cube.position.y < 0.75) {
+          cube.position.y = 0.75;
+          cube.userData.velocity.y = 0;
+        }
+      }
+
+      // Button check
+      const distToButton = cube.position.distanceTo(button.position);
+      if (distToButton < 1.5 && !button.userData.pressed) {
+        button.userData.pressed = true;
+        buttonMat.color.setHex(0x00ff00);
+        door.userData.open = true;
+        door.position.y = -3;
+      }
+
+      // Portal teleportation
+      if (state.portalGun.blue && state.portalGun.orange) {
+        const distToBlue = camera.position.distanceTo(state.portalGun.blue.position);
+        const distToOrange = camera.position.distanceTo(state.portalGun.orange.position);
+        
+        if (distToBlue < 2) {
+          camera.position.copy(state.portalGun.orange.position);
+          camera.position.add(new THREE.Vector3(0, 0, 2));
+        } else if (distToOrange < 2) {
+          camera.position.copy(state.portalGun.blue.position);
+          camera.position.add(new THREE.Vector3(0, 0, 2));
+        }
+      }
+
+      renderer.render(scene, camera);
+    };
+
+    animate();
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mousedown', onMouseDown);
+      renderer.domElement.removeEventListener('click', onClick);
+      document.removeEventListener('pointerlockchange', onPointerLockChange);
+      containerRef.current?.removeChild(renderer.domElement);
+    };
+  }, []);
+
+  return (
+    <div style={{ width: '100vw', height: '100vh', margin: 0, padding: 0, overflow: 'hidden' }}>
+      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+      {instructions && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'rgba(0, 0, 0, 0.8)',
+          color: 'white',
+          padding: '30px',
+          borderRadius: '10px',
+          fontFamily: 'Arial, sans-serif',
+          maxWidth: '500px',
+          textAlign: 'center'
+        }}>
+          <h2 style={{ marginTop: 0, color: '#00ffff' }}>Portal Physics Puzzle</h2>
+          <p><strong>Click to start</strong></p>
+          <div style={{ textAlign: 'left', margin: '20px 0' }}>
+            <p><strong>Controls:</strong></p>
+            <p>• WASD - Move</p>
+            <p>• Mouse - Look around</p>
+            <p>• Space - Jump</p>
+            <p>• Left Click - Blue Portal</p>
+            <p>• Right Click - Orange Portal</p>
+            <p>• E - Pick up/Drop cube</p>
+          </div>
+          <p style={{ fontSize: '14px', color: '#aaa' }}>
+            Place portals on walls, pick up the golden cube, and place it on the red button to open the green door!
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default PortalGame;
