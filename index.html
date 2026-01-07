@@ -53,7 +53,7 @@
         <div class="controls">
             <p><strong>Controls:</strong></p>
             <p>• WASD - Move</p>
-            <p>• Mouse - Look around</p>
+            <p>• Mouse - Look around (X-Axis Inverted)</p>
             <p>• Space - Jump</p>
             <p>• Left Click - Blue Portal</p>
             <p>• Right Click - Orange Portal</p>
@@ -248,7 +248,8 @@
 
         function onMouseMove(e) {
             if (!mouse.locked) return;
-            mouse.x -= e.movementX * 0.002;
+            // Inverting the X axis: use += instead of -= for movementX
+            mouse.x += e.movementX * 0.002; 
             mouse.y -= e.movementY * 0.002;
             mouse.y = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, mouse.y));
         }
